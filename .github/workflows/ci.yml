@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'feat/**', 'fix/**', 'hotfix/**']
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  TF_VERSION: "1.11.3"
+  TFLINT_VERSION: "v0.53.0"
+  TRIVY_VERSION: "0.58.0"
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Format Check
+  # -----------------------------------------------------------------------
+  format-check:
+    name: Terraform Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format Check
+        run: terraform fmt -check -recursive -diff
+
+  # -----------------------------------------------------------------------
+  # Validate
+  # -----------------------------------------------------------------------
+  validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    needs: format-check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Validate Module
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate Examples
+        run: |
+          for dir in examples/*/; do
+            if [[ -f "${dir}versions.tf" ]]; then
+              echo "::group::Validating ${dir}"
+              cd "$dir"
+              terraform init -backend=false
+              terraform validate
+              cd "$GITHUB_WORKSPACE"
+              echo "::endgroup::"
+            fi
+          done
+
+  # -----------------------------------------------------------------------
+  # Lint
+  # -----------------------------------------------------------------------
+  lint:
+    name: TFLint
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint Module
+        run: tflint
+
+  # -----------------------------------------------------------------------
+  # Test
+  # -----------------------------------------------------------------------
+  test:
+    name: Terraform Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Run Unit Tests
+        run: |
+          terraform init -backend=false
+          terraform test -filter=tests/unit/ -verbose
+
+  # -----------------------------------------------------------------------
+  # Security Scan
+  # -----------------------------------------------------------------------
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy IaC Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          exit-code: 1
+          format: sarif
+          output: trivy-results.sarif
+          trivyignores: .trivyignore
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+  # -----------------------------------------------------------------------
+  # Commit Lint (PR only)
+  # -----------------------------------------------------------------------
+  commit-lint:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate PR Title
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PATTERN="^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\(.+\))?: .{3,}"
+          if [[ ! "$PR_TITLE" =~ $PATTERN ]]; then
+            echo "::error::PR title does not follow Conventional Commits format."
+            echo "Expected: type(scope): description"
+            echo "Types: feat, fix, docs, style, refactor, perf, test, chore, build, ci, revert"
+            echo "Got: $PR_TITLE"
+            exit 1
+          fi
+
+  # -----------------------------------------------------------------------
+  # Documentation Check
+  # -----------------------------------------------------------------------
+  docs-check:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup terraform-docs
+        run: |
+          mkdir -p /tmp/terraform-docs
+          curl -sSLo /tmp/terraform-docs/terraform-docs.tar.gz \
+            https://github.com/terraform-docs/terraform-docs/releases/download/v0.19.0/terraform-docs-v0.19.0-linux-amd64.tar.gz
+          tar -xzf /tmp/terraform-docs/terraform-docs.tar.gz -C /tmp/terraform-docs
+          chmod +x /tmp/terraform-docs/terraform-docs
+          sudo mv /tmp/terraform-docs/terraform-docs /usr/local/bin/
+
+      - name: Check docs are up to date
+        run: |
+          terraform-docs markdown table --output-file README.md --output-mode inject .
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo "::error::terraform-docs are out of date. Run 'make docs' and commit."
+            git diff
+            exit 1
+          fi

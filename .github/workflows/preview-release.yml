@@ -1,0 +1,112 @@
+name: Preview Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches-ignore: [main, develop]
+
+permissions:
+  contents: write
+
+jobs:
+  preview-release:
+    name: Create Preview Release
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch != 'main' &&
+      github.event.workflow_run.head_branch != 'develop' &&
+      github.event.workflow_run.event == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+
+      - name: Determine preview version
+        id: version
+        run: |
+          # Get the latest stable tag (exclude pre-release tags)
+          LATEST_STABLE=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+
+          if [[ -z "$LATEST_STABLE" ]]; then
+            BASE_VERSION="0.1.0"
+          else
+            BASE_VERSION="${LATEST_STABLE#v}"
+            # Bump patch for preview base
+            IFS='.' read -r major minor patch <<< "$BASE_VERSION"
+            patch=$((patch + 1))
+            BASE_VERSION="${major}.${minor}.${patch}"
+          fi
+
+          # Sanitize branch name for semver pre-release identifier
+          # semver allows: [0-9A-Za-z-] only, dot-separated
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          SANITIZED=$(echo "$BRANCH" | sed 's|[^a-zA-Z0-9-]|-|g' | sed 's|--*|-|g' | sed 's|^-||;s|-$||' | cut -c1-40)
+
+          # Use run number for unique incrementing identifier
+          RUN_NUMBER="${{ github.event.workflow_run.run_number }}"
+
+          PREVIEW_VERSION="${BASE_VERSION}-${SANITIZED}.${RUN_NUMBER}"
+          echo "version=${PREVIEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Preview version: v${PREVIEW_VERSION}"
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create preview tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.version }}" \
+            -m "Preview release v${{ steps.version.outputs.version }} from ${{ steps.version.outputs.branch }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Pre-Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version.outputs.version }}"
+          name: "Preview: v${{ steps.version.outputs.version }}"
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            ## Preview Release
+
+            **Branch:** `${{ steps.version.outputs.branch }}`
+            **Version:** `v${{ steps.version.outputs.version }}`
+
+            > ⚠️ This is a **preview release** from a feature branch.
+            > It is not production-ready. Use for testing and integration only.
+
+            ### Usage
+
+            ```hcl
+            module "this" {
+              source = "github.com/${{ github.repository }}?ref=v${{ steps.version.outputs.version }}"
+
+              # ...
+            }
+            ```
+
+      - name: Summary
+        run: |
+          echo "## Preview Release" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: v${{ steps.version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch**: ${{ steps.version.outputs.branch }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Type**: Pre-release (ephemeral)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Consume this preview:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```hcl' >> "$GITHUB_STEP_SUMMARY"
+          echo "source = \"github.com/${{ github.repository }}?ref=v${{ steps.version.outputs.version }}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

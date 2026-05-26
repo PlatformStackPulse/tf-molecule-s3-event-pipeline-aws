@@ -1,0 +1,60 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Weekly on Monday at 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.11.3"
+
+jobs:
+  update-providers:
+    name: Check Provider Updates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Check for provider updates
+        id: updates
+        run: |
+          UPDATES_FOUND=false
+          terraform init -backend=false -upgrade
+          if [[ -n "$(git diff --name-only .terraform.lock.hcl 2>/dev/null)" ]]; then
+            UPDATES_FOUND=true
+          fi
+          echo "found=$UPDATES_FOUND" >> "$GITHUB_OUTPUT"
+
+      - name: Validate after update
+        if: steps.updates.outputs.found == 'true'
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Create PR for updates
+        if: steps.updates.outputs.found == 'true'
+        run: |
+          BRANCH="chore/provider-updates-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(deps): update terraform provider lock files"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore(deps): update terraform provider lock files" \
+            --body "Automated provider lock file update. Please review and merge." \
+            --base main \
+            --head "$BRANCH"
+        env:
+          GH_TOKEN: ${{ github.token }}

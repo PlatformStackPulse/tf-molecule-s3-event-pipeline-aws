@@ -1,0 +1,118 @@
+name: Auto Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  auto-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if already tagged
+        id: check
+        run: |
+          if git describe --exact-match HEAD 2>/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine version bump
+        if: steps.check.outputs.skip == 'false'
+        id: bump
+        run: |
+          # Get the latest stable tag (no pre-release)
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v '-' | head -1)
+
+          if [[ -z "$LATEST_TAG" ]]; then
+            echo "version=v1.0.0" >> "$GITHUB_OUTPUT"
+            echo "First release: v1.0.0"
+            exit 0
+          fi
+
+          # Parse current version
+          CURRENT="${LATEST_TAG#v}"
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+
+          # Check commits since last tag for conventional commit prefixes
+          COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s")
+
+          BUMP_MAJOR=false
+          BUMP_MINOR=false
+          BUMP_PATCH=false
+
+          while IFS= read -r msg; do
+            if echo "$msg" | grep -qE '^[a-z]+!(\(.+\))?:|BREAKING CHANGE:'; then
+              BUMP_MAJOR=true
+            elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+              BUMP_MINOR=true
+            elif echo "$msg" | grep -qE '^fix(\(.+\))?:'; then
+              BUMP_PATCH=true
+            fi
+          done <<< "$COMMITS"
+
+          if [[ "$BUMP_MAJOR" == "true" ]]; then
+            echo "version=v$((major + 1)).0.0" >> "$GITHUB_OUTPUT"
+          elif [[ "$BUMP_MINOR" == "true" ]]; then
+            echo "version=v${major}.$((minor + 1)).0" >> "$GITHUB_OUTPUT"
+          elif [[ "$BUMP_PATCH" == "true" ]]; then
+            echo "version=v${major}.${minor}.$((patch + 1))" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No releasable commits (only chore/ci/docs/test). Skipping."
+            exit 0
+          fi
+
+      - name: Create module archive
+        if: steps.check.outputs.skip == 'false' && steps.bump.outputs.skip != 'true'
+        run: |
+          MODULE_NAME=$(basename "$GITHUB_REPOSITORY")
+          VERSION="${{ steps.bump.outputs.version }}"
+          ARCHIVE="${MODULE_NAME}-${VERSION#v}.tar.gz"
+          tar -czf "/tmp/${ARCHIVE}" \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='tests' \
+            --exclude='scripts' \
+            --exclude='.devcontainer' \
+            --exclude='.trivyignore' \
+            .
+          mv "/tmp/${ARCHIVE}" .
+          sha256sum "${ARCHIVE}" > SHA256SUMS
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip == 'false' && steps.bump.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          MODULE_NAME=$(basename "$GITHUB_REPOSITORY")
+
+          gh release create "$VERSION" \
+            --title "Release ${VERSION}" \
+            --generate-notes \
+            "${MODULE_NAME}-${VERSION#v}.tar.gz" \
+            SHA256SUMS
+
+      - name: Summary
+        if: steps.check.outputs.skip == 'false' && steps.bump.outputs.skip != 'true'
+        run: |
+          echo "## Auto Release" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: ${{ steps.bump.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Triggered by**: CI success on main" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Artifacts**: module archive + SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"

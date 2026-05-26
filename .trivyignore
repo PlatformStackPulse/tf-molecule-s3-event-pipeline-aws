@@ -1,0 +1,25 @@
+# Trivy Ignore File
+#
+# Add Trivy finding IDs to suppress known false positives.
+# Always include a justification comment.
+#
+# Format:
+#   AVD-AWS-XXXX  # Justification for suppression
+#
+# Example:
+#   AVD-AWS-0089  # S3 bucket logging intentionally disabled for cost savings
+
+# Template placeholder resources — suppress until replaced with real module code
+AVD-AWS-0089  # S3 bucket logging not required for template placeholder resource
+AVD-AWS-0090  # S3 bucket lifecycle not required for template placeholder resource
+
+# Atom pattern: single-resource modules. Security controls are separate atoms
+# composed at the molecule level. Uncomment the lines relevant to your atom:
+#
+# S3 bucket atoms — public access block is a separate atom
+# AVD-AWS-0086  # Public access block is handled by tf-atom-s3-bucket-public-access-block-aws
+# AVD-AWS-0087  # Public policy block is handled by tf-atom-s3-bucket-public-access-block-aws
+# AVD-AWS-0091  # Ignore public ACLs is handled by tf-atom-s3-bucket-public-access-block-aws
+# AVD-AWS-0093  # Restrict public buckets is handled by tf-atom-s3-bucket-public-access-block-aws
+# AVD-AWS-0094  # Public access block is handled by tf-atom-s3-bucket-public-access-block-aws
+# AVD-AWS-0132  # Customer managed key encryption is handled by tf-atom-s3-bucket-encryption-aws

@@ -1,0 +1,11 @@
+# Default owners for everything
+* @your-org/platform-engineering
+
+# Module-specific owners
+modules/ @your-org/platform-engineering
+examples/ @your-org/platform-engineering
+
+# CI/CD and security
+.github/ @your-org/platform-engineering
+.pre-commit-config.yaml @your-org/platform-engineering
+.tflint.hcl @your-org/platform-engineering

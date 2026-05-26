@@ -1,0 +1,23 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name | default("terraform-aws-CHANGEME") }}
+  description: ${{ values.description | default("Terraform module for CHANGEME") }}
+  annotations:
+    github.com/project-slug: PlatformStackPulse/${{ values.name | default("terraform-aws-CHANGEME") }}
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - terraform
+    - aws
+    - infrastructure
+  links:
+    - url: https://github.com/PlatformStackPulse/${{ values.name | default("terraform-aws-CHANGEME") }}
+      title: GitHub Repository
+      icon: github
+spec:
+  type: terraform-module
+  lifecycle: production
+  owner: ${{ values.owner | default("platform-team") }}
+  system: ${{ values.system | default("infrastructure") }}
+  dependsOn:
+    - resource: terraform-module:PlatformStackPulse/tf-label

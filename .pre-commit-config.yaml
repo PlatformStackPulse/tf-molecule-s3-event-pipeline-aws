@@ -1,0 +1,61 @@
+repos:
+  # -----------------------------------------------------------------------
+  # Commit Message Validation
+  # -----------------------------------------------------------------------
+  - repo: https://github.com/jorisroovers/gitlint
+    rev: v0.19.1
+    hooks:
+      - id: gitlint
+        args: [--contrib=contrib-title-conventional-commits]
+        stages: [commit-msg]
+
+  # -----------------------------------------------------------------------
+  # General File Checks
+  # -----------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: detect-private-key
+
+  # -----------------------------------------------------------------------
+  # Terraform Hooks
+  # -----------------------------------------------------------------------
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.97.3
+    hooks:
+      # Format
+      - id: terraform_fmt
+
+      # Validate (requires init)
+      - id: terraform_validate
+        args:
+          - --hook-config=--retry-once-with-cleanup=true
+          - --tf-init-args=-backend=false
+
+      # Lint with TFLint
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+
+      # Auto-generate documentation
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml
+          - --hook-config=--path-to-file=README.md
+          - --hook-config=--add-to-existing-file=true
+          - --hook-config=--create-file-if-not-exist=true
+
+      # Security scanning with Trivy
+      - id: terraform_trivy
+        args:
+          - --args=--tf-exclude-downloaded-modules
+          - --args=--severity HIGH,CRITICAL
