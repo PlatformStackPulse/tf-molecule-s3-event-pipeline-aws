@@ -1,3 +1,195 @@
+# tf-molecule-s3-event-pipeline-aws
+
+[![CI](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/ci.yml/badge.svg)](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/ci.yml)
+[![Release](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/auto-release.yml/badge.svg)](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/auto-release.yml)
+[![CodeQL](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/codeql.yml/badge.svg)](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/codeql.yml)
+[![Changelog](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/changelog.yml/badge.svg)](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/actions/workflows/changelog.yml)
+[![Latest Release](https://img.shields.io/github/v/release/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws?sort=semver)](https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws/releases)
+![Terraform](https://img.shields.io/badge/terraform-%3E%3D1.6.0-blueviolet?logo=terraform)
+![License](https://img.shields.io/github/license/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws)
+
+---
+
+## Purpose
+
+An S3 event-driven pipeline molecule that creates a data landing zone with built-in event notifications. Objects landing in this bucket automatically trigger Lambda functions, SQS queues, or SNS topics for downstream processing. Designed for ETL pipelines, media processing workflows, and data ingestion with fan-out patterns.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  tf-molecule-s3-event-pipeline-aws                                          │
+│                                                                             │
+│  ┌──────────────────┐                                                       │
+│  │ tf-atom-s3-      │──────────────────────────────────────────┐            │
+│  │ bucket-aws       │                                          │            │
+│  │ (landing zone)   │                                          │            │
+│  └────────┬─────────┘                                          │            │
+│           │ bucket_id                                          │            │
+│           ├─────────────────┬──────────────────┬───────────────┤            │
+│           ▼                 ▼                  ▼               ▼            │
+│  ┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐    │
+│  │ public-access- │ │ encryption   │ │ versioning   │ │ policy       │    │
+│  │ block          │ │ (KMS)        │ │ (Enabled)    │ │ (cross-acct/ │    │
+│  │ (all blocked)  │ │              │ │              │ │  service)    │    │
+│  └────────────────┘ └──────────────┘ └──────────────┘ └──────────────┘    │
+│           │                                                                 │
+│           ├─────────────────────────────────────────┐                       │
+│           ▼                                         ▼                       │
+│  ┌────────────────────────────────────┐   ┌──────────────────┐             │
+│  │ notification (CORE)                │   │ lifecycle        │             │
+│  │ ┌───────┐ ┌───────┐ ┌───────┐    │   │ (optional)       │             │
+│  │ │Lambda │ │  SQS  │ │  SNS  │    │   │                  │             │
+│  │ └───┬───┘ └───┬───┘ └───┬───┘    │   └──────────────────┘             │
+│  │     │         │         │         │                                      │
+│  └─────┼─────────┼─────────┼────────┘                                      │
+│         ▼         ▼         ▼                                               │
+│    [Processing] [Queue] [Fan-out]                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Scope
+
+| In Scope | Out of Scope |
+|----------|--------------|
+| Bucket creation with tf-label naming | Website hosting (→ `tf-molecule-s3-static-site-aws`) |
+| Public access block (all 4 controls) | CORS configuration (→ `tf-molecule-s3-static-site-aws`) |
+| Server-side encryption (KMS default) | Access logging (→ `tf-molecule-s3-secure-bucket-aws`) |
+| Object versioning for data lineage | CloudFront distribution (→ `tf-molecule-s3-web-hosting-aws`) |
+| Bucket policy (service principal/cross-account) | Lambda function creation |
+| Event notifications (Lambda/SQS/SNS) | SQS queue creation |
+| Lifecycle rules (optional archive/expire) | SNS topic creation |
+| | Replication / Object lock |
+
+## Features
+
+- **Event-driven by design** — notifications are the molecule's core purpose, always configured
+- **Multi-target support** — Lambda, SQS, and SNS notification targets simultaneously
+- **Filter-based routing** — prefix and suffix filters for targeted event delivery
+- **Data lineage** — versioning enabled by default for reprocessing source data
+- **KMS encryption** — aws:kms default with Bucket Key for cost efficiency
+- **Composed from atoms** — each concern is a separate, tested module
+- **Optional lifecycle** — archive or expire processed data (e.g., Glacier after 30d)
+- **Context propagation** — inherits namespace, environment, stage, name via tf-label
+
+## Usage
+
+### Minimal (Lambda trigger on object creation)
+
+```hcl
+module "pipeline_bucket" {
+  source = "github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws?ref=v1.0.0"
+
+  namespace   = "myorg"
+  environment = "production"
+  name        = "data-ingest"
+
+  bucket_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowServiceWrite"
+      Effect    = "Allow"
+      Principal = { Service = "logs.amazonaws.com" }
+      Action    = ["s3:PutObject"]
+      Resource  = "arn:aws:s3:::myorg-production-data-ingest/*"
+    }]
+  })
+
+  lambda_notifications = [{
+    lambda_function_arn = aws_lambda_function.etl_processor.arn
+    events             = ["s3:ObjectCreated:*"]
+  }]
+}
+```
+
+### Full configuration (multi-target fan-out with lifecycle)
+
+```hcl
+module "pipeline_bucket" {
+  source = "github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws?ref=v1.0.0"
+
+  namespace   = "myorg"
+  environment = "production"
+  name        = "media-ingest"
+
+  # KMS encryption with custom key
+  kms_key_id = aws_kms_key.pipeline.arn
+
+  # Cross-account write access
+  bucket_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "CrossAccountWrite"
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::123456789012:root" }
+      Action    = ["s3:PutObject", "s3:PutObjectAcl"]
+      Resource  = "arn:aws:s3:::myorg-production-media-ingest/*"
+    }]
+  })
+
+  # Lambda for image processing
+  lambda_notifications = [{
+    lambda_function_arn = aws_lambda_function.image_processor.arn
+    events             = ["s3:ObjectCreated:*"]
+    filter_suffix      = ".jpg"
+  }]
+
+  # SQS for video transcoding queue
+  sqs_notifications = [{
+    queue_arn     = aws_sqs_queue.video_queue.arn
+    events       = ["s3:ObjectCreated:*"]
+    filter_suffix = ".mp4"
+  }]
+
+  # SNS for audit/monitoring fan-out
+  sns_notifications = [{
+    topic_arn = aws_sns_topic.audit.arn
+    events    = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
+  }]
+
+  # Archive processed data
+  enable_lifecycle = true
+  lifecycle_rules = [
+    {
+      id              = "archive-processed"
+      prefix          = "processed/"
+      transition      = [{ days = 30, storage_class = "GLACIER" }]
+      expiration_days = 365
+    },
+    {
+      id              = "expire-temp"
+      prefix          = "tmp/"
+      expiration_days = 7
+    }
+  ]
+}
+```
+
+## Composed Atoms
+
+| Atom | Role in Molecule | Default |
+|------|-----------------|---------|
+| [`tf-atom-s3-bucket-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-aws) | Core data landing zone | Always created |
+| [`tf-atom-s3-bucket-public-access-block-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-public-access-block-aws) | Block all public access | All 4 controls = true |
+| [`tf-atom-s3-bucket-encryption-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-encryption-aws) | Encryption at rest | aws:kms with Bucket Key |
+| [`tf-atom-s3-bucket-versioning-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-versioning-aws) | Object versioning for data lineage | Enabled |
+| [`tf-atom-s3-bucket-policy-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-policy-aws) | Access control policy | User-provided (service/cross-account) |
+| [`tf-atom-s3-bucket-notification-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-notification-aws) | Event triggers (CORE) | Lambda/SQS/SNS targets |
+| [`tf-atom-s3-bucket-lifecycle-configuration-aws`](https://github.com/PlatformStackPulse/tf-atom-s3-bucket-lifecycle-configuration-aws) | Data retention/archival | Disabled (set rules to enable) |
+
+## CI/CD Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | Push/PR to main, feature branches | Format, validate, lint, test, security |
+| `auto-release.yml` | CI passes on main | Semantic version tag + GitHub Release + artifacts |
+| `preview-release.yml` | CI passes on feature branch | Pre-release tag for testing |
+| `codeql.yml` | Weekly + push main | SAST security analysis |
+| `changelog.yml` | Push main | Auto-update CHANGELOG.md |
+| `dependencies.yml` | Weekly | Check for provider updates |
+
+## Module Documentation
+
 <!-- BEGIN_TF_DOCS -->
 ### Requirements
 
@@ -70,3 +262,10 @@ No resources.
 | <a name="output_encryption_algorithm"></a> [encryption\_algorithm](#output\_encryption\_algorithm) | Encryption algorithm in use |
 | <a name="output_versioning_status"></a> [versioning\_status](#output\_versioning\_status) | Current versioning status |
 <!-- END_TF_DOCS -->
+
+## Contributing
+
+1. Create a feature branch from `main`
+2. Run `make fmt && make lint && make docs && make test`
+3. Submit a PR — CI must pass before merge
+4. Squash merge to `main` triggers auto-release
