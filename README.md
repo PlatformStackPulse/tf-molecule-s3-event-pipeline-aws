@@ -78,7 +78,7 @@ An S3 event-driven pipeline molecule that creates a data landing zone with built
 
 ```hcl
 module "pipeline_bucket" {
-  source = "github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws?ref=v1.0.0"
+  source = "git::https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws.git?ref=v1.0.0"
 
   namespace   = "myorg"
   environment = "production"
@@ -106,7 +106,7 @@ module "pipeline_bucket" {
 
 ```hcl
 module "pipeline_bucket" {
-  source = "github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws?ref=v1.0.0"
+  source = "git::https://github.com/PlatformStackPulse/tf-molecule-s3-event-pipeline-aws.git?ref=v1.0.0"
 
   namespace   = "myorg"
   environment = "production"
@@ -262,6 +262,35 @@ No resources.
 | <a name="output_encryption_algorithm"></a> [encryption\_algorithm](#output\_encryption\_algorithm) | Encryption algorithm in use |
 | <a name="output_versioning_status"></a> [versioning\_status](#output\_versioning\_status) | Current versioning status |
 <!-- END_TF_DOCS -->
+
+## Tests
+
+Unit tests live in [`tests/unit/`](tests/unit/) and run against a mock AWS provider
+(`mock_provider "aws" {}`) — no AWS credentials or real API calls are required. They
+assert on plan-known values (the tf-label `id`, module counts, and input pass-throughs)
+so they are fast and deterministic. Coverage includes:
+
+- **`creates_when_enabled`** — verifies the tf-label id resolves to `eg-test-thing` and the
+  `versioning_status` / `encryption_algorithm` outputs carry their defaults.
+- **`lifecycle_disabled_by_default`** — asserts the optional lifecycle module is not created.
+- **`lifecycle_enabled_creates_one`** — asserts exactly one lifecycle module is created when
+  `enable_lifecycle = true`.
+- **`disabled_creates_nothing`** — asserts the module creates nothing when `enabled = false`.
+
+Integration tests in [`tests/integration/`](tests/integration/) exercise real AWS resources
+and require credentials.
+
+```bash
+# Unit tests (mock provider, no credentials)
+make test-unit
+# or directly:
+terraform test -test-directory=tests/unit
+
+# Integration tests (requires AWS credentials)
+make test-integration
+# or directly:
+terraform test -test-directory=tests/integration
+```
 
 ## Contributing
 

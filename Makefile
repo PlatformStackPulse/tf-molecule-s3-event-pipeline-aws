@@ -97,13 +97,13 @@ test: test-unit ## Run all tests
 .PHONY: test-unit
 test-unit: init ## Run unit tests
 	@echo "$(GREEN)Running unit tests...$(RESET)"
-	@terraform test -filter=$(TESTS_DIR)/unit/ -verbose
+	@terraform test -test-directory=$(TESTS_DIR)/unit -verbose
 	@echo "$(GREEN)✓ Unit tests passed$(RESET)"
 
 .PHONY: test-integration
 test-integration: init ## Run integration tests (requires AWS credentials)
 	@echo "$(YELLOW)Running integration tests (requires AWS credentials)...$(RESET)"
-	@terraform test -filter=$(TESTS_DIR)/integration/ -verbose
+	@terraform test -test-directory=$(TESTS_DIR)/integration -verbose
 	@echo "$(GREEN)✓ Integration tests passed$(RESET)"
 
 .PHONY: security

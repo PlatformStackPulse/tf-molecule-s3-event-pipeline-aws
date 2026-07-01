@@ -112,7 +112,7 @@ jobs:
       - name: Run Unit Tests
         run: |
           terraform init -backend=false
-          terraform test -filter=tests/unit/ -verbose
+          terraform test -test-directory=tests/unit -verbose
 
   # -----------------------------------------------------------------------
   # Security Scan
